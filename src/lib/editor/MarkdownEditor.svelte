@@ -1,9 +1,34 @@
 <script lang="ts">
-  import { basicSetup } from 'codemirror';
   import { markdown } from '@codemirror/lang-markdown';
   import { EditorState } from '@codemirror/state';
-  import { EditorView, keymap } from '@codemirror/view';
-  import { defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
+  import {
+    EditorView,
+    keymap,
+    lineNumbers,
+    highlightActiveLineGutter,
+    highlightSpecialChars,
+    drawSelection,
+    dropCursor,
+    rectangularSelection,
+    highlightActiveLine,
+  } from '@codemirror/view';
+  import {
+    foldGutter,
+    indentOnInput,
+    syntaxHighlighting,
+    defaultHighlightStyle,
+    bracketMatching,
+    foldKeymap,
+    indentUnit,
+  } from '@codemirror/language';
+  import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
+  import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
+  import {
+    autocompletion,
+    completionKeymap,
+    closeBrackets,
+    closeBracketsKeymap,
+  } from '@codemirror/autocomplete';
   import { onMount } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
   import {
@@ -22,11 +47,17 @@
   let {
     documentId,
     value = '',
+    showLineNumbers = true,
+    tabSize = 4,
+    spellcheck = false,
     onchange,
     onselectionchange,
   }: {
     documentId: string;
     value?: string;
+    showLineNumbers?: boolean;
+    tabSize?: number;
+    spellcheck?: boolean;
     onchange: (value: string) => void;
     onselectionchange: (selection: { anchor: number; head: number }) => void;
   } = $props();
@@ -35,26 +66,61 @@
   let localValue = $state('');
   let currentId = '';
 
-  function createState(content: string) {
+  let lastSln: boolean | undefined = undefined;
+  let lastTs: number | undefined = undefined;
+  let lastSc: boolean | undefined = undefined;
+
+  function createState(content: string, selection?: any) {
+    const ext = [
+      highlightSpecialChars(),
+      history(),
+      drawSelection(),
+      dropCursor(),
+      EditorState.allowMultipleSelections.of(true),
+      indentOnInput(),
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      bracketMatching(),
+      closeBrackets(),
+      autocompletion(),
+      rectangularSelection(),
+      highlightActiveLine(),
+      highlightSelectionMatches(),
+      markdown(),
+      keymap.of([
+        ...closeBracketsKeymap,
+        ...defaultKeymap,
+        ...searchKeymap,
+        ...historyKeymap,
+        ...foldKeymap,
+        ...completionKeymap,
+        indentWithTab,
+      ]),
+      EditorView.lineWrapping,
+      indentUnit.of(' '.repeat(tabSize)),
+      EditorView.contentAttributes.of({ spellcheck: spellcheck ? 'true' : 'false' }),
+      EditorView.updateListener.of((update) => {
+        if (update.selectionSet) {
+          onselectionchange({
+            anchor: update.state.selection.main.anchor,
+            head: update.state.selection.main.head,
+          });
+        }
+        if (!update.docChanged) return;
+        localValue = update.state.doc.toString();
+        onchange(localValue);
+      }),
+    ];
+
+    if (showLineNumbers) {
+      ext.push(lineNumbers());
+      ext.push(highlightActiveLineGutter());
+      ext.push(foldGutter());
+    }
+
     return EditorState.create({
       doc: content,
-      extensions: [
-        basicSetup,
-        markdown(),
-        keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-        EditorView.lineWrapping,
-        EditorView.updateListener.of((update) => {
-          if (update.selectionSet) {
-            onselectionchange({
-              anchor: update.state.selection.main.anchor,
-              head: update.state.selection.main.head,
-            });
-          }
-          if (!update.docChanged) return;
-          localValue = update.state.doc.toString();
-          onchange(localValue);
-        }),
-      ],
+      selection,
+      extensions: ext,
     });
   }
 
@@ -129,6 +195,9 @@
   onMount(() => {
     localValue = value;
     currentId = documentId;
+    lastSln = showLineNumbers;
+    lastTs = tabSize;
+    lastSc = spellcheck;
     view = new EditorView({
       parent: host,
       state: states.get(documentId) ?? createState(value),
@@ -139,14 +208,33 @@
 
   $effect(() => {
     if (!view) return;
+
     if (documentId !== currentId) {
-      states.set(currentId, view.state);
+      if (currentId) {
+        states.set(currentId, view.state);
+      }
       currentId = documentId;
       const next = states.get(documentId) ?? createState(value);
       localValue = next.doc.toString();
       view.setState(next);
+      lastSln = showLineNumbers;
+      lastTs = tabSize;
+      lastSc = spellcheck;
       return;
     }
+
+    if (showLineNumbers !== lastSln || tabSize !== lastTs || spellcheck !== lastSc) {
+      lastSln = showLineNumbers;
+      lastTs = tabSize;
+      lastSc = spellcheck;
+
+      const currentDoc = view.state.doc.toString();
+      const currentSelection = view.state.selection;
+      const nextState = createState(currentDoc, currentSelection);
+      view.setState(nextState);
+      return;
+    }
+
     if (value === localValue) return;
     localValue = value;
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });

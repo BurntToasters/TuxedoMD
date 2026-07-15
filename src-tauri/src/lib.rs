@@ -405,6 +405,88 @@ fn setup_native_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[tauri::command]
+fn get_licenses(app: tauri::AppHandle) -> Result<String, String> {
+    fn load_license_file(
+        app: &tauri::AppHandle,
+        file_name: &str,
+        attempted_paths: &mut Vec<String>,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+        attempted_paths.push(format!("asset:{file_name}"));
+        if let Some(asset) = app.asset_resolver().get(file_name.to_string()) {
+            let content = String::from_utf8(asset.bytes)
+                .map_err(|e| format!("Failed to decode bundled {file_name}: {e}"))?;
+            let parsed: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse bundled {file_name}: {e}"))?;
+            let object = parsed
+                .as_object()
+                .ok_or_else(|| format!("Bundled {file_name} must be a JSON object"))?;
+            return Ok(Some(object.clone()));
+        }
+
+        let candidate_suffixes = [
+            file_name.to_string(),
+            format!("public/{file_name}"),
+            format!("dist/{file_name}"),
+        ];
+
+        if let Ok(resource_path) = app.path().resource_dir() {
+            for suffix in &candidate_suffixes {
+                let license_path = resource_path.join(suffix);
+                attempted_paths.push(license_path.display().to_string());
+                if let Ok(content) = fs::read_to_string(&license_path) {
+                    let parsed: serde_json::Value =
+                        serde_json::from_str(&content).map_err(|e| {
+                            format!("Failed to parse {}: {}", license_path.display(), e)
+                        })?;
+                    let object = parsed.as_object().ok_or_else(|| {
+                        format!("{} must be a JSON object", license_path.display())
+                    })?;
+                    return Ok(Some(object.clone()));
+                }
+            }
+        }
+
+        for suffix in &candidate_suffixes {
+            let license_path = std::path::Path::new(suffix);
+            attempted_paths.push(license_path.display().to_string());
+            if let Ok(content) = fs::read_to_string(license_path) {
+                let parsed: serde_json::Value = serde_json::from_str(&content)
+                    .map_err(|e| format!("Failed to parse {}: {}", license_path.display(), e))?;
+                let object = parsed
+                    .as_object()
+                    .ok_or_else(|| format!("{} must be a JSON object", license_path.display()))?;
+                return Ok(Some(object.clone()));
+            }
+        }
+
+        Ok(None)
+    }
+
+    let mut attempted_paths: Vec<String> = Vec::new();
+    let mut merged = serde_json::Map::new();
+    let mut loaded_any = false;
+
+    for file_name in ["licenses-npm.json", "licenses-cargo.json"] {
+        if let Some(entries) = load_license_file(&app, file_name, &mut attempted_paths)? {
+            loaded_any = true;
+            for (key, value) in entries {
+                merged.insert(key, value);
+            }
+        }
+    }
+
+    if !loaded_any {
+        return Err(format!(
+            "Failed to read licenses: no license files were found in bundled assets or known paths (tried: {})",
+            attempted_paths.join(", ")
+        ));
+    }
+
+    serde_json::to_string(&serde_json::Value::Object(merged))
+        .map_err(|e| format!("Failed to encode merged licenses payload: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let pending_paths = markdown_paths(std::env::args().skip(1));
@@ -435,7 +517,8 @@ pub fn run() {
             load_app_state,
             save_app_state,
             delete_app_state,
-            take_pending_open_paths
+            take_pending_open_paths,
+            get_licenses
         ])
         .on_menu_event(|app, event| {
             let _ = app.emit("native-menu-command", event.id().as_ref().to_string());

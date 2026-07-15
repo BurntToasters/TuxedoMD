@@ -44,6 +44,11 @@ export interface AppSettings {
   glassEffects: 'system' | 'on' | 'off';
   fontSize: number;
   lineWrap: boolean;
+  showLineNumbers: boolean;
+  tabSize: 2 | 4;
+  previewFont: 'sans' | 'serif' | 'mono';
+  spellcheck: boolean;
+  focusMode: boolean;
 }
 
 export interface SessionState {
@@ -66,4 +71,9 @@ export const defaultSettings: AppSettings = {
   glassEffects: 'system',
   fontSize: 14,
   lineWrap: true,
+  showLineNumbers: true,
+  tabSize: 4,
+  previewFont: 'sans',
+  spellcheck: false,
+  focusMode: false,
 };

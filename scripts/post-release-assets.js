@@ -13,7 +13,7 @@ function walk(folder) {
   for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
     const item = path.join(folder, entry.name);
     if (entry.isDirectory() && !entry.name.startsWith('stage-')) walk(item);
-    else if (allowed.test(entry.name)) files.push(item);
+    else if (allowed.test(entry.name) && !/pro/i.test(entry.name)) files.push(item);
   }
 }
 const target = path.join(root, 'src-tauri/target');

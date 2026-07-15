@@ -10,6 +10,11 @@
     Search,
     Settings2,
     X,
+    Palette,
+    Sliders,
+    Scroll,
+    ChevronDown,
+    ChevronUp,
   } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import MarkdownEditor from './lib/editor/MarkdownEditor.svelte';
@@ -27,6 +32,7 @@
     saveState,
     deleteState,
     takePendingOpenPaths,
+    getLicenses,
   } from './lib/tauri';
   import { applyNativeWindowEffects, resizeWindowForDrawer } from './lib/window';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -71,6 +77,46 @@ Try editing this document, or open a Markdown file from the toolbar.`;
   let status = $state('Ready');
   let settings = $state<AppSettings>(defaultSettings);
   let settingsOpen = $state(false);
+  let activeSettingsTab = $state<'appearance' | 'editor' | 'files' | 'about'>('appearance');
+
+  // Licensing variables
+  let licenses = $state<
+    Record<
+      string,
+      {
+        licenses: string | string[];
+        repository?: string;
+        publisher?: string;
+        licenseFile?: string;
+        licenseText?: string;
+      }
+    >
+  >({});
+  let licensesLoading = $state(false);
+  let licensesError = $state<string | null>(null);
+  let licenseSearch = $state('');
+  let expandedLicensePackage = $state<string | null>(null);
+
+  async function loadLicenses() {
+    if (Object.keys(licenses).length > 0) return;
+    licensesLoading = true;
+    licensesError = null;
+    try {
+      const raw = await getLicenses();
+      licenses = JSON.parse(raw);
+    } catch (err) {
+      licensesError = err instanceof Error ? err.message : String(err);
+    } finally {
+      licensesLoading = false;
+    }
+  }
+
+  $effect(() => {
+    if (activeSettingsTab === 'about' && settingsOpen) {
+      void loadLicenses();
+    }
+  });
+
   let paletteOpen = $state(false);
   let conflictOpen = $state(false);
   let conflictTabId = $state<string | null>(null);
@@ -92,6 +138,12 @@ Try editing this document, or open a Markdown file from the toolbar.`;
         return match ? { level: match[1].length, title: match[2], line: index + 1 } : null;
       })
       .filter((item): item is { level: number; title: string; line: number } => item !== null)
+  );
+
+  let filteredLicensesList = $derived(
+    Object.entries(licenses)
+      .filter(([name]) => name.toLowerCase().includes(licenseSearch.toLowerCase()))
+      .sort((a, b) => a[0].localeCompare(b[0]))
   );
 
   $effect(() => {
@@ -485,7 +537,7 @@ Try editing this document, or open a Markdown file from the toolbar.`;
 <svelte:head><title>Tuxedo MD</title></svelte:head>
 <svelte:window onmousedown={handleDrag} />
 
-<div class="app-shell">
+<div class="app-shell" class:focus-mode={settings.focusMode}>
   <header class:mac-titlebar={isMacPlatform} class="titlebar" data-tauri-drag-region>
     <div class="brand" data-tauri-drag-region>
       <div class="brand-mark"><BookOpenText size={18} /></div>
@@ -635,6 +687,9 @@ Try editing this document, or open a Markdown file from the toolbar.`;
             <MarkdownEditor
               documentId={activeTab?.id ?? 'empty'}
               value={activeTab?.content ?? ''}
+              showLineNumbers={settings.showLineNumbers}
+              tabSize={settings.tabSize}
+              spellcheck={settings.spellcheck}
               onchange={updateContent}
               onselectionchange={updateSelection}
             />
@@ -644,7 +699,7 @@ Try editing this document, or open a Markdown file from the toolbar.`;
           <article class="preview-pane">
             <!-- Preview HTML is produced by rehype-sanitize in src/lib/preview.ts. -->
             <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-            <div class="markdown-body">{@html preview}</div>
+            <div class="markdown-body preview-{settings.previewFont}">{@html preview}</div>
           </article>
         {/if}
       </section>
@@ -669,48 +724,279 @@ Try editing this document, or open a Markdown file from the toolbar.`;
       if (event.target === event.currentTarget) settingsOpen = false;
     }}
   >
-    <dialog open class="settings-modal" aria-label="Settings">
-      <header>
+    <dialog open class="settings-modal tabbed-layout" aria-label="Settings">
+      <header class="settings-header">
         <h2>Settings</h2>
         <button class="icon-button" onclick={() => (settingsOpen = false)}><X /></button>
       </header>
-      <label
-        >Theme <select bind:value={settings.theme}
-          ><option value="system">System</option><option value="dark">Dark</option><option
-            value="light">Light</option
-          ><option value="contrast">High contrast</option></select
-        ></label
-      >
-      <label
-        >Glass effects <select bind:value={settings.glassEffects}
-          ><option value="system">Follow system</option><option value="on">Always on</option><option
-            value="off">Off</option
-          ></select
-        ></label
-      >
-      <label
-        >Editor font size <input type="range" min="12" max="22" bind:value={settings.fontSize} />
-        {settings.fontSize}px</label
-      >
-      <label><input type="checkbox" bind:checked={settings.lineWrap} /> Wrap editor lines</label>
-      <label
-        ><input type="checkbox" bind:checked={settings.autosave} /> Autosave existing files</label
-      >
-      <label
-        >Autosave delay <select bind:value={settings.autosaveDelayMs}
-          ><option value={500}>0.5 seconds</option><option value={1500}>1.5 seconds</option><option
-            value={3000}>3 seconds</option
-          ></select
-        ></label
-      >
-      <label
-        ><input type="checkbox" bind:checked={settings.restoreSession} /> Restore full session</label
-      >
-      <label
-        ><input type="checkbox" bind:checked={settings.keepDraftsSilently} /> Keep untitled drafts silently
-        when closing</label
-      >
-      <p>Recovery drafts stay locally in your operating system's app-data folder.</p>
+      <div class="settings-body">
+        <aside class="settings-sidebar">
+          <button
+            class:active={activeSettingsTab === 'appearance'}
+            onclick={() => (activeSettingsTab = 'appearance')}
+          >
+            <Palette size={16} /> <span>Appearance</span>
+          </button>
+          <button
+            class:active={activeSettingsTab === 'editor'}
+            onclick={() => (activeSettingsTab = 'editor')}
+          >
+            <Sliders size={16} /> <span>Editor</span>
+          </button>
+          <button
+            class:active={activeSettingsTab === 'files'}
+            onclick={() => (activeSettingsTab = 'files')}
+          >
+            <Save size={16} /> <span>Files & AutoSave</span>
+          </button>
+          <button
+            class:active={activeSettingsTab === 'about'}
+            onclick={() => (activeSettingsTab = 'about')}
+          >
+            <Scroll size={16} /> <span>About & Licenses</span>
+          </button>
+        </aside>
+
+        <main class="settings-content">
+          {#if activeSettingsTab === 'appearance'}
+            <div class="settings-section">
+              <h3>Appearance</h3>
+
+              <div class="settings-group">
+                <div class="settings-label">Theme</div>
+                <div class="select-wrapper">
+                  <select bind:value={settings.theme}>
+                    <option value="system">System</option>
+                    <option value="dark">Dark</option>
+                    <option value="light">Light</option>
+                    <option value="contrast">High contrast</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <div class="settings-label">Glass effects</div>
+                <div class="select-wrapper">
+                  <select bind:value={settings.glassEffects}>
+                    <option value="system">Follow system</option>
+                    <option value="on">Always on</option>
+                    <option value="off">Off</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <div class="settings-label">Preview font family</div>
+                <div class="select-wrapper">
+                  <select bind:value={settings.previewFont}>
+                    <option value="sans">Sans-Serif (Standard)</option>
+                    <option value="serif">Serif (Literary)</option>
+                    <option value="mono">Monospace (Code)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="settings-group toggle-group">
+                <label class="switch-container">
+                  <span>Focus Mode (Hides UI chrome)</span>
+                  <input type="checkbox" bind:checked={settings.focusMode} />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+            </div>
+          {:else if activeSettingsTab === 'editor'}
+            <div class="settings-section">
+              <h3>Editor</h3>
+
+              <div class="settings-group">
+                <div class="settings-label">Editor font size ({settings.fontSize}px)</div>
+                <input
+                  class="range-slider"
+                  type="range"
+                  min="12"
+                  max="22"
+                  bind:value={settings.fontSize}
+                />
+              </div>
+
+              <div class="settings-group toggle-group">
+                <label class="switch-container">
+                  <span>Wrap editor lines</span>
+                  <input type="checkbox" bind:checked={settings.lineWrap} />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+
+              <div class="settings-group toggle-group">
+                <label class="switch-container">
+                  <span>Show line numbers</span>
+                  <input type="checkbox" bind:checked={settings.showLineNumbers} />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+
+              <div class="settings-group">
+                <div class="settings-label">Tab size</div>
+                <div class="segmented-control">
+                  <button
+                    class:active={settings.tabSize === 2}
+                    onclick={() => (settings.tabSize = 2)}>2 spaces</button
+                  >
+                  <button
+                    class:active={settings.tabSize === 4}
+                    onclick={() => (settings.tabSize = 4)}>4 spaces</button
+                  >
+                </div>
+              </div>
+
+              <div class="settings-group toggle-group">
+                <label class="switch-container">
+                  <span>Enable editor spellcheck</span>
+                  <input type="checkbox" bind:checked={settings.spellcheck} />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+            </div>
+          {:else if activeSettingsTab === 'files'}
+            <div class="settings-section">
+              <h3>Files & AutoSave</h3>
+
+              <div class="settings-group toggle-group">
+                <label class="switch-container">
+                  <span>Autosave existing files</span>
+                  <input type="checkbox" bind:checked={settings.autosave} />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+
+              {#if settings.autosave}
+                <div class="settings-group">
+                  <div class="settings-label">Autosave delay</div>
+                  <div class="select-wrapper">
+                    <select bind:value={settings.autosaveDelayMs}>
+                      <option value={500}>0.5 seconds</option>
+                      <option value={1500}>1.5 seconds</option>
+                      <option value={3000}>3 seconds</option>
+                    </select>
+                  </div>
+                </div>
+              {/if}
+
+              <div class="settings-group toggle-group">
+                <label class="switch-container">
+                  <span>Restore full session on startup</span>
+                  <input type="checkbox" bind:checked={settings.restoreSession} />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+
+              <div class="settings-group toggle-group">
+                <label class="switch-container">
+                  <span>Keep untitled drafts silently when closing</span>
+                  <input type="checkbox" bind:checked={settings.keepDraftsSilently} />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+
+              <p class="settings-note">
+                Recovery drafts stay locally in your operating system's app-data folder.
+              </p>
+            </div>
+          {:else if activeSettingsTab === 'about'}
+            <div class="settings-section">
+              <h3>About & Licenses</h3>
+
+              <div class="about-branding">
+                <div class="about-logo"><BookOpenText size={32} /></div>
+                <div class="about-meta">
+                  <h4>Tuxedo MD</h4>
+                  <div class="about-meta-row">
+                    <span>v0.1.0-alpha.1</span>
+                    <span class:pro={isFullEdition} class="edition"
+                      >{isFullEdition ? 'PRO' : 'CE'}</span
+                    >
+                  </div>
+                </div>
+              </div>
+
+              <div class="licenses-section">
+                <div class="licenses-header">
+                  <h5>Third-party Licenses</h5>
+                  <div class="licenses-search">
+                    <Search size={14} />
+                    <input
+                      type="text"
+                      placeholder="Search package licenses..."
+                      bind:value={licenseSearch}
+                    />
+                  </div>
+                </div>
+
+                <div class="licenses-list">
+                  {#if licensesLoading}
+                    <div class="loading-state">Loading dependency licenses...</div>
+                  {:else if licensesError}
+                    <div class="error-state">Error loading licenses: {licensesError}</div>
+                  {:else if filteredLicensesList.length === 0}
+                    <div class="empty-state">No packages found matching search filter.</div>
+                  {:else}
+                    {#each filteredLicensesList as [pkgName, pkgInfo] (pkgName)}
+                      <div class="license-card">
+                        <button
+                          class="license-card-header"
+                          onclick={() => {
+                            expandedLicensePackage =
+                              expandedLicensePackage === pkgName ? null : pkgName;
+                          }}
+                        >
+                          <div class="license-pkg-info">
+                            <span class="pkg-name">{pkgName}</span>
+                            <span class="pkg-license"
+                              >{Array.isArray(pkgInfo.licenses)
+                                ? pkgInfo.licenses.join(', ')
+                                : pkgInfo.licenses || 'Unknown'}</span
+                            >
+                          </div>
+                          <span class="expand-icon">
+                            {#if expandedLicensePackage === pkgName}
+                              <ChevronUp size={16} />
+                            {:else}
+                              <ChevronDown size={16} />
+                            {/if}
+                          </span>
+                        </button>
+                        {#if expandedLicensePackage === pkgName}
+                          <div class="license-card-body">
+                            {#if pkgInfo.publisher}
+                              <p class="license-meta">
+                                <strong>Publisher:</strong>
+                                {pkgInfo.publisher}
+                              </p>
+                            {/if}
+                            {#if pkgInfo.repository}
+                              <p class="license-meta">
+                                <strong>Repository:</strong>
+                                <a
+                                  href={pkgInfo.repository}
+                                  target="_blank"
+                                  rel="noopener noreferrer">{pkgInfo.repository}</a
+                                >
+                              </p>
+                            {/if}
+                            {#if pkgInfo.licenseText}
+                              <pre class="license-text">{pkgInfo.licenseText}</pre>
+                            {/if}
+                          </div>
+                        {/if}
+                      </div>
+                    {/each}
+                  {/if}
+                </div>
+              </div>
+            </div>
+          {/if}
+        </main>
+      </div>
     </dialog>
   </div>
 {/if}

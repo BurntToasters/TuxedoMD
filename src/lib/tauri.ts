@@ -70,3 +70,7 @@ export async function deleteState(key: string): Promise<void> {
 export async function takePendingOpenPaths(): Promise<string[]> {
   return invoke<string[]>('take_pending_open_paths');
 }
+
+export async function getLicenses(): Promise<string> {
+  return invoke<string>('get_licenses');
+}
